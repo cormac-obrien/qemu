@@ -480,7 +480,7 @@ static void cuda_adb_poll(void *opaque)
 static void cuda_receive_packet(CUDAState *s,
                                 const uint8_t *data, int len)
 {
-    uint8_t obuf[16];
+    uint8_t obuf[16] = { CUDA_PACKET, 0, data[0] };
     int autopoll;
     uint32_t ti;
 
@@ -497,23 +497,16 @@ static void cuda_receive_packet(CUDAState *s,
                 timer_del(s->adb_poll_timer);
             }
         }
-        obuf[0] = CUDA_PACKET;
-        obuf[1] = data[1];
-        cuda_send_packet_to_host(s, obuf, 2);
+        //obuf[1] = data[1];
+        cuda_send_packet_to_host(s, obuf, 3);
         break;
     case CUDA_SET_TIME:
         ti = (((uint32_t)data[1]) << 24) + (((uint32_t)data[2]) << 16) + (((uint32_t)data[3]) << 8) + data[4];
         s->tick_offset = ti - (qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / get_ticks_per_sec());
-        obuf[0] = CUDA_PACKET;
-        obuf[1] = 0;
-        obuf[2] = 0;
         cuda_send_packet_to_host(s, obuf, 3);
         break;
     case CUDA_GET_TIME:
         ti = s->tick_offset + (qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / get_ticks_per_sec());
-        obuf[0] = CUDA_PACKET;
-        obuf[1] = 0;
-        obuf[2] = 0;
         obuf[3] = ti >> 24;
         obuf[4] = ti >> 16;
         obuf[5] = ti >> 8;
@@ -524,23 +517,36 @@ static void cuda_receive_packet(CUDAState *s,
     case CUDA_SET_DEVICE_LIST:
     case CUDA_SET_AUTO_RATE:
     case CUDA_SET_POWER_MESSAGES:
-        obuf[0] = CUDA_PACKET;
-        obuf[1] = 0;
-        cuda_send_packet_to_host(s, obuf, 2);
+        cuda_send_packet_to_host(s, obuf, 3);
         break;
     case CUDA_POWERDOWN:
-        obuf[0] = CUDA_PACKET;
-        obuf[1] = 0;
-        cuda_send_packet_to_host(s, obuf, 2);
+        cuda_send_packet_to_host(s, obuf, 3);
         qemu_system_shutdown_request();
         break;
     case CUDA_RESET_SYSTEM:
-        obuf[0] = CUDA_PACKET;
-        obuf[1] = 0;
-        cuda_send_packet_to_host(s, obuf, 2);
+        cuda_send_packet_to_host(s, obuf, 3);
         qemu_system_reset_request();
         break;
+    case CUDA_COMBINED_FORMAT_IIC:
+        obuf[0] = ERROR_PACKET;
+        obuf[1] = 0x5;
+        obuf[2] = CUDA_PACKET;
+        obuf[3] = data[0];
+        cuda_send_packet_to_host(s, obuf, 4);
+        break;
+    case CUDA_GET_SET_IIC:
+        if (len == 4) {
+            cuda_send_packet_to_host(s, obuf, 3);
+        } else {
+            obuf[0] = ERROR_PACKET;
+            obuf[1] = 0x2;
+            obuf[2] = CUDA_PACKET;
+            obuf[3] = data[0];
+            cuda_send_packet_to_host(s, obuf, 4);
+        }
+        break;
     default:
+        cuda_send_packet_to_host(s, obuf, 3);
         break;
     }
 }
@@ -560,19 +566,21 @@ static void cuda_receive_packet_from_host(CUDAState *s,
     switch(data[0]) {
     case ADB_PACKET:
         {
-            uint8_t obuf[ADB_MAX_OUT_LEN + 2];
+            uint8_t obuf[ADB_MAX_OUT_LEN + 3];
             int olen;
-            olen = adb_request(&s->adb_bus, obuf + 2, data + 1, len - 1);
-            if (olen > 0) {
+            olen = adb_request(&s->adb_bus, obuf + 3, data + 1, len - 1);
+            if (olen >= 0) {
                 obuf[0] = ADB_PACKET;
                 obuf[1] = 0x00;
+                obuf[2] = data[1];
             } else {
                 /* error */
                 obuf[0] = ADB_PACKET;
                 obuf[1] = -olen;
+                obuf[2] = data[1];
                 olen = 0;
             }
-            cuda_send_packet_to_host(s, obuf, olen + 2);
+            cuda_send_packet_to_host(s, obuf, olen + 3);
         }
         break;
     case CUDA_PACKET:
